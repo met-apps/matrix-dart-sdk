@@ -1336,9 +1336,8 @@ class CallSession {
           await updateMuteStatus();
           missedCall = false;
         } else if (state == RTCIceConnectionState.RTCIceConnectionStateFailed) {
-          await pc?.restartIce();
-          // await initOutboundCall(CallType.kVideo);
-          // await hangup(CallErrorCode.IceFailed, false);
+          await initOutboundCall(CallType.kVideo);
+          await hangup(CallErrorCode.IceFailed, false);
         }
       };
     } catch (e) {
