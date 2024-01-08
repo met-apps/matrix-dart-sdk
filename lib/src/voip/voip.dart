@@ -29,6 +29,9 @@ abstract class WebRTCDelegate {
 }
 
 class VoIP {
+  // used only for internal tests, all txids for call events will be overwritten to this
+  static String? customTxid;
+
   TurnServerCredentials? _turnServerCredentials;
   Map<String, CallSession> calls = <String, CallSession>{};
   Map<String, GroupCall> groupCalls = <String, GroupCall>{};
@@ -49,6 +52,7 @@ class VoIP {
     for (final room in client.rooms) {
       if (room.activeGroupCallEvents.isNotEmpty) {
         for (final groupCall in room.activeGroupCallEvents) {
+          // ignore: discarded_futures
           createGroupCallFromRoomStateEvent(groupCall, emitHandleNewGroupCall: false);
         }
       }
@@ -164,7 +168,11 @@ class VoIP {
     final String partyId = content['party_id'];
     final int lifetime = content['lifetime'];
     final String? confId = content['conf_id'];
+
+    // msc3401 group call invites send deviceId and senderSessionId in to device messages
     final String? deviceId = content['device_id'];
+    final String? senderSessionId = content['sender_session_id'];
+
     final call = calls[callId];
 
     Logs().d(
@@ -218,7 +226,7 @@ class VoIP {
     newCall.remotePartyId = partyId;
     newCall.remoteUser = await room.requestUser(senderId);
     newCall.opponentDeviceId = deviceId;
-    newCall.opponentSessionId = content['sender_session_id'];
+    newCall.opponentSessionId = senderSessionId;
     if (!delegate.canHandleNewCall && (confId == null || confId != currentGroupCID)) {
       Logs().v('[VOIP] onCallInvite: Unable to handle new calls, maybe user is busy.');
       await newCall.reject(reason: CallErrorCode.UserBusy, shouldEmit: false);
@@ -242,17 +250,24 @@ class VoIP {
       await delegate.playRingtone();
     }
 
+    // When getUserMedia throws an exception, we handle it by terminating the call,
+    // and all this happens inside initWithInvite. If we set currentCID after
+    // initWithInvite, we might set it to callId even after it was reset to null
+    // by terminate.
+    currentCID = callId;
+
     await newCall.initWithInvite(
         callType, offer, sdpStreamMetadata, lifetime, confId != null);
-
-    currentCID = callId;
 
     // Popup CallingPage for incoming call.
     if (confId == null && !newCall.callHasEnded) {
       await delegate.handleNewCall(newCall);
     }
 
-    onIncomingCall.add(newCall);
+    if (confId != null) {
+      // the stream is used to monitor incoming peer calls in a mesh call
+      onIncomingCall.add(newCall);
+    }
   }
 
   Future<void> onCallAnswer(
@@ -322,11 +337,17 @@ class VoIP {
     await delegate.stopRingtone();
     Logs().v('[VOIP] onCallHangup => ${content.toString()}');
     final String callId = content['call_id'];
+    final String partyId = content['party_id'];
     final call = calls[callId];
     if (call != null) {
       if (call.room.id != roomId) {
         Logs().w(
             'Ignoring call hangup for room $roomId claiming to be for call in room ${call.room.id}');
+        return;
+      }
+      if (call.remotePartyId != null && call.remotePartyId != partyId) {
+        Logs().w(
+            'Ignoring call hangup from sender with a different party_id $partyId for call in room ${call.room.id}');
         return;
       }
       // hangup in any case, either if the other party hung up or we did on another device
@@ -343,6 +364,7 @@ class VoIP {
   Future<void> onCallReject(
       String roomId, String senderId, Map<String, dynamic> content) async {
     final String callId = content['call_id'];
+    final String partyId = content['party_id'];
     Logs().d('Reject received for call ID $callId');
 
     final call = calls[callId];
@@ -350,6 +372,11 @@ class VoIP {
       if (call.room.id != roomId) {
         Logs().w(
             'Ignoring call reject for room $roomId claiming to be for call in room ${call.room.id}');
+        return;
+      }
+      if (call.remotePartyId != null && call.remotePartyId != partyId) {
+        Logs().w(
+            'Ignoring call reject from sender with a different party_id $partyId for call in room ${call.room.id}');
         return;
       }
       await call.onRejectReceived(content['reason']);
@@ -463,6 +490,19 @@ class VoIP {
             'Ignoring call negotiation for room $roomId claiming to be for call in room ${call.room.id}');
         return;
       }
+      if (content['party_id'] != call.remotePartyId) {
+        Logs().w('Ignoring call negotiation, wrong partyId detected');
+        return;
+      }
+      if (content['party_id'] == call.localPartyId) {
+        Logs().w('Ignoring call negotiation echo');
+        return;
+      }
+
+      // ideally you also check the lifetime here and discard negotiation events
+      // if age of the event was older than the lifetime but as to device events
+      // do not have a unsigned age nor a origin_server_ts there's no easy way to
+      // override this one function atm
 
       final description = content['description'];
       try {
@@ -574,7 +614,7 @@ class VoIP {
       return null;
     }
     final groupId = genCallID();
-    final groupCall = GroupCall(
+    final groupCall = await GroupCall(
       groupCallId: groupId,
       client: client,
       voip: this,

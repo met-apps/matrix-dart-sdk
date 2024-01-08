@@ -150,8 +150,9 @@ class IGroupCallRoomMemberState {
   List<IGroupCallRoomMemberCallState> calls = [];
   IGroupCallRoomMemberState.fromJson(MatrixEvent event) {
     if (event.content['m.calls'] != null) {
-      (event.content['m.calls'] as List<dynamic>).forEach(
-          (call) => calls.add(IGroupCallRoomMemberCallState.fromJson(call)));
+      for (final call in (event.content['m.calls'] as List<dynamic>)) {
+        calls.add(IGroupCallRoomMemberCallState.fromJson(call));
+      }
     }
   }
 }
@@ -191,7 +192,7 @@ class GroupCall {
   WrappedMediaStream? localUserMediaStream;
   WrappedMediaStream? localScreenshareStream;
   String? localDesktopCapturerSourceId;
-  List<CallSession> calls = [];
+  List<CallSession> callSessions = [];
   List<User> participants = [];
   List<WrappedMediaStream> userMediaStreams = [];
   List<WrappedMediaStream> screenshareStreams = [];
@@ -231,11 +232,11 @@ class GroupCall {
     this.groupCallId = groupCallId ?? genCallID();
   }
 
-  GroupCall create() {
+  Future<GroupCall> create() async {
     voip.groupCalls[groupCallId] = this;
     voip.groupCalls[room.id] = this;
 
-    client.setRoomStateWithKey(
+    await client.setRoomStateWithKey(
       room.id,
       EventTypes.GroupCallPrefix,
       groupCallId,
@@ -276,12 +277,12 @@ class GroupCall {
     final List<MatrixEvent> events = [];
     final roomStates = await client.getRoomState(room.id);
     roomStates.sort((a, b) => a.originServerTs.compareTo(b.originServerTs));
-    roomStates.forEach((value) {
+    for (final value in roomStates) {
       if (value.type == EventTypes.GroupCallMemberPrefix &&
           !room.callMemberStateIsExpired(value, groupCallId)) {
         events.add(value);
       }
-    });
+    }
     return events;
   }
 
@@ -403,7 +404,7 @@ class GroupCall {
     final stream =
         await voip.delegate.mediaDevices.getUserMedia({'audio': true});
     final audioTrack = stream.getAudioTracks().first;
-    for (final call in calls) {
+    for (final call in callSessions) {
       await call.updateAudioDevice(audioTrack);
     }
   }
@@ -412,6 +413,7 @@ class GroupCall {
     if (localUserMediaStream != null) {
       final oldStream = localUserMediaStream!.stream;
       localUserMediaStream!.setNewStream(stream.stream!);
+      // ignore: discarded_futures
       stopMediaStream(oldStream);
     }
   }
@@ -439,7 +441,7 @@ class GroupCall {
 
     _callSubscription = voip.onIncomingCall.stream.listen(onIncomingCall);
 
-    for (final call in calls) {
+    for (final call in callSessions) {
       await onIncomingCall(call);
     }
 
@@ -476,7 +478,7 @@ class GroupCall {
 
     await removeMemberStateEvent();
 
-    final callsCopy = calls.toList();
+    final callsCopy = callSessions.toList();
 
     for (final call in callsCopy) {
       await removeCall(call, CallErrorCode.UserHangup);
@@ -551,7 +553,7 @@ class GroupCall {
       setTracksEnabled(localUserMediaStream!.stream!.getAudioTracks(), !muted);
     }
 
-    for (final call in calls) {
+    for (final call in callSessions) {
       await call.setMicrophoneMuted(muted);
     }
 
@@ -569,7 +571,7 @@ class GroupCall {
       setTracksEnabled(localUserMediaStream!.stream!.getVideoTracks(), !muted);
     }
 
-    for (final call in calls) {
+    for (final call in callSessions) {
       await call.setLocalVideoMuted(muted);
     }
 
@@ -618,7 +620,7 @@ class GroupCall {
         await localScreenshareStream!.initialize();
 
         onGroupCallEvent.add(GroupCallEvent.LocalScreenshareStateChanged);
-        for (final call in calls) {
+        for (final call in callSessions) {
           await call.addLocalStream(
               await localScreenshareStream!.stream!.clone(),
               localScreenshareStream!.purpose);
@@ -635,7 +637,7 @@ class GroupCall {
         return false;
       }
     } else {
-      for (final call in calls) {
+      for (final call in callSessions) {
         await call.removeLocalStream(call.localScreenSharingStream!);
       }
 
@@ -933,7 +935,7 @@ class GroupCall {
   }
 
   CallSession? getCallByUserId(String userId) {
-    final value = calls.where((item) => item.remoteUser!.id == userId);
+    final value = callSessions.where((item) => item.remoteUser!.id == userId);
     if (value.isNotEmpty) {
       return value.first;
     }
@@ -941,7 +943,7 @@ class GroupCall {
   }
 
   Future<void> addCall(CallSession call) async {
-    calls.add(call);
+    callSessions.add(call);
     await initCall(call);
     onGroupCallEvent.add(GroupCallEvent.CallsChanged);
   }
@@ -949,14 +951,14 @@ class GroupCall {
   Future<void> replaceCall(
       CallSession existingCall, CallSession replacementCall) async {
     final existingCallIndex =
-        calls.indexWhere((element) => element == existingCall);
+        callSessions.indexWhere((element) => element == existingCall);
 
     if (existingCallIndex == -1) {
       throw Exception('Couldn\'t find call to replace');
     }
 
-    calls.removeAt(existingCallIndex);
-    calls.add(replacementCall);
+    callSessions.removeAt(existingCallIndex);
+    callSessions.add(replacementCall);
 
     await disposeCall(existingCall, CallErrorCode.Replaced);
     await initCall(replacementCall);
@@ -968,7 +970,7 @@ class GroupCall {
   Future<void> removeCall(CallSession call, String hangupReason) async {
     await disposeCall(call, hangupReason);
 
-    calls.removeWhere((element) => call.callId == element.callId);
+    callSessions.removeWhere((element) => call.callId == element.callId);
 
     onGroupCallEvent.add(GroupCallEvent.CallsChanged);
   }
@@ -1285,7 +1287,7 @@ class GroupCall {
 
     onGroupCallEvent.add(GroupCallEvent.ParticipantsChanged);
 
-    final callsCopylist = List.from(calls);
+    final callsCopylist = List.from(callSessions);
 
     for (final call in callsCopylist) {
       await call.updateMuteStatus();
@@ -1303,7 +1305,7 @@ class GroupCall {
 
     onGroupCallEvent.add(GroupCallEvent.ParticipantsChanged);
 
-    final callsCopylist = List.from(calls);
+    final callsCopylist = List.from(callSessions);
 
     for (final call in callsCopylist) {
       await call.updateMuteStatus();
