@@ -32,6 +32,10 @@ import 'package:matrix/src/utils/markdown.dart';
 import 'package:matrix/src/utils/marked_unread.dart';
 import 'package:matrix/src/utils/space_child.dart';
 
+/// max PDU size for server to accept the event with some buffer incase the server adds unsigned data f.ex age
+/// https://spec.matrix.org/v1.9/client-server-api/#size-limits
+const int maxPDUSize = 60000;
+
 enum PushRuleState { notify, mentionsOnly, dontNotify }
 
 enum JoinRules { public, knock, invite, private }
@@ -45,12 +49,20 @@ const Map<GuestAccess, String> _guestAccessMap = {
   GuestAccess.forbidden: 'forbidden',
 };
 
+extension GuestAccessExtension on GuestAccess {
+  String get text => _guestAccessMap[this]!;
+}
+
 const Map<HistoryVisibility, String> _historyVisibilityMap = {
   HistoryVisibility.invited: 'invited',
   HistoryVisibility.joined: 'joined',
   HistoryVisibility.shared: 'shared',
   HistoryVisibility.worldReadable: 'world_readable',
 };
+
+extension HistoryVisibilityExtension on HistoryVisibility {
+  String get text => _historyVisibilityMap[this]!;
+}
 
 const String messageSendingStatusKey =
     'com.famedly.famedlysdk.message_sending_status';
@@ -160,7 +172,11 @@ class Room {
       return;
     }
 
-    final isMessageEvent = client.roomPreviewLastEvents.contains(state.type);
+    final isMessageEvent = {
+      EventTypes.Message,
+      EventTypes.Encrypted,
+      EventTypes.Sticker
+    }.contains(state.type);
 
     // We ignore events editing events older than the current-latest here so
     // i.e. newly sent edits for older events don't show up in room preview
@@ -177,18 +193,10 @@ class Room {
     }
 
     // Ignore other non-state events
-    final stateKey = isMessageEvent ? '' : state.stateKey;
+    final stateKey = state.stateKey ??
+        (client.roomPreviewLastEvents.contains(state.type) ? '' : null);
     final roomId = state.roomId;
     if (stateKey == null || roomId == null) {
-      return;
-    }
-
-    // Do not set old events as state events
-    final prevEvent = getState(state.type, stateKey);
-    if (prevEvent != null &&
-        prevEvent.eventId != state.eventId &&
-        prevEvent.originServerTs.millisecondsSinceEpoch >
-            state.originServerTs.millisecondsSinceEpoch) {
       return;
     }
 
@@ -286,13 +294,10 @@ class Room {
       if (sender != null) return sender;
     }
     if (membership == Membership.leave) {
-      final invitation = getState(EventTypes.RoomMember, client.userID!);
-      if (invitation != null &&
-          invitation.unsigned?.tryGet<String>('prev_sender') != null) {
-        final name = unsafeGetUserFromMemoryOrFallback(
-                invitation.unsigned!.tryGet<String>('prev_sender')!)
-            .calcDisplayname(i18n: i18n);
-        return i18n.wasDirectChatDisplayName(name);
+      if (directChatMatrixID != null) {
+        return i18n.wasDirectChatDisplayName(
+            unsafeGetUserFromMemoryOrFallback(directChatMatrixID)
+                .calcDisplayname(i18n: i18n));
       }
     }
     return i18n.emptyChat;
@@ -962,6 +967,13 @@ class Room {
         ? await client.encryption!
             .encryptGroupMessagePayload(id, content, type: type)
         : content;
+
+    final utf8EncodedJsonLength =
+        utf8.encode(jsonEncode(sendMessageContent)).length;
+
+    if (utf8EncodedJsonLength > maxPDUSize) {
+      throw EventTooLarge(utf8EncodedJsonLength);
+    }
     return await client.sendMessage(
       id,
       sendMessageContent.containsKey('ciphertext')
@@ -1117,7 +1129,9 @@ class Room {
           txid: messageID,
         );
       } catch (e, s) {
-        if (e is MatrixException &&
+        if (e is EventTooLarge) {
+          rethrow;
+        } else if (e is MatrixException &&
             e.retryAfterMs != null &&
             !DateTime.now()
                 .add(Duration(milliseconds: e.retryAfterMs!))
@@ -1499,9 +1513,10 @@ class Room {
 
     // Fetch all users from database we have got here.
     if (eventContextId == null) {
-      for (final event in events) {
-        if (getState(EventTypes.RoomMember, event.senderId) != null) continue;
-        final dbUser = await client.database?.getUser(event.senderId, this);
+      final userIds = events.map((event) => event.senderId).toSet();
+      for (final userId in userIds) {
+        if (getState(EventTypes.RoomMember, userId) != null) continue;
+        final dbUser = await client.database?.getUser(userId, this);
         if (dbUser != null) setState(dbUser);
       }
     }
@@ -1563,8 +1578,6 @@ class Room {
     return <User>[];
   }
 
-  bool _requestedParticipants = false;
-
   /// Request the full list of participants from the server. The local list
   /// from the store is not complete if the client uses lazy loading.
   /// List `membershipFilter` defines with what membership do you want the
@@ -1580,17 +1593,20 @@ class Room {
       ],
       bool suppressWarning = false,
       bool cache = true]) async {
-    if (!participantListComplete && partial) {
+    if (!participantListComplete || partial) {
       // we aren't fully loaded, maybe the users are in the database
+      // We always need to check the database in the partial case, since state
+      // events won't get written to memory in this case and someone new could
+      // have joined, while someone else left, which might lead to the same
+      // count in the completeness check.
       final users = await client.database?.getUsers(this) ?? [];
       for (final user in users) {
         setState(user);
       }
     }
 
-    // Do not request users from the server if we have already done it
-    // in this session or have a complete list locally.
-    if (_requestedParticipants || participantListComplete) {
+    // Do not request users from the server if we have already have a complete list locally.
+    if (participantListComplete) {
       return getParticipants(membershipFilter);
     }
 
@@ -1615,7 +1631,6 @@ class Room {
       }
     }
 
-    _requestedParticipants = cache;
     users.removeWhere((u) => !membershipFilter.contains(u.membership));
     return users;
   }
@@ -1623,10 +1638,14 @@ class Room {
   /// Checks if the local participant list of joined and invited users is complete.
   bool get participantListComplete {
     final knownParticipants = getParticipants();
-    knownParticipants.removeWhere(
-        (u) => ![Membership.join, Membership.invite].contains(u.membership));
-    return knownParticipants.length ==
-        (summary.mJoinedMemberCount ?? 0) + (summary.mInvitedMemberCount ?? 0);
+    final joinedCount =
+        knownParticipants.where((u) => u.membership == Membership.join).length;
+    final invitedCount = knownParticipants
+        .where((u) => u.membership == Membership.invite)
+        .length;
+
+    return (summary.mJoinedMemberCount ?? 0) == joinedCount &&
+        (summary.mInvitedMemberCount ?? 0) == invitedCount;
   }
 
   @Deprecated(
@@ -2132,7 +2151,7 @@ class Room {
       EventTypes.GuestAccess,
       '',
       {
-        'guest_access': _guestAccessMap[guestAccess],
+        'guest_access': guestAccess.text,
       },
     );
     return;
@@ -2157,7 +2176,7 @@ class Room {
       EventTypes.HistoryVisibility,
       '',
       {
-        'history_visibility': _historyVisibilityMap[historyVisibility],
+        'history_visibility': historyVisibility.text,
       },
     );
     return;
@@ -2350,7 +2369,7 @@ class Room {
       : setSpaceChild(roomId, via: const []);
 
   @override
-  bool operator ==(dynamic other) => (other is Room && other.id == id);
+  bool operator ==(Object other) => (other is Room && other.id == id);
 
   @override
   int get hashCode => Object.hashAll([id]);
@@ -2359,4 +2378,9 @@ class Room {
 enum EncryptionHealthState {
   allVerified,
   unverifiedDevices,
+}
+
+class EventTooLarge implements Exception {
+  int length;
+  EventTooLarge(this.length);
 }

@@ -1,8 +1,71 @@
-## [0.25.4] - 5th January 2023
+## [0.26.1] 15th March 2024
+- chore: add noice/echo cancelling flags to getUserMedia (td)
+- feat: Add commands /ignore and /unignore (Krille)
+- feat: Offers client.ensureNotSoftLoggedOut() to fix using client with stopped sync loop (Krille)
+- fix: throw EventTooLarge on exceeding max fed PDU (td)
+
+## [0.26.0] 8th March 2024
+This release adds a new state to the `LoginState` named `softLoggedOut`. Learn more about it here:
+https://spec.matrix.org/v1.9/client-server-api/#soft-logout
+
+When a client is in a soft logout state, it is not yet cleared, but sync has stopped and it expects
+to perform a token refresh or a new login while providing the old device ID.
+
+- refactor: BREAKING Allow calling init when in soft logout state and fix some bugs (Krille)
+
+## [0.25.13] 7th March 2024
+- chore: Add regression test for invite->join state handling (Nicolas Werner)
+- feat: add fromLocalStoreOnly to Event.downloadAndDecryptAttachment (Romain GUILLOT)
+- fix: archived room state store logic (Nicolas Werner)
+- fix: Do not assume a missing timestamp means "now" (Nicolas Werner)
+- fix: Do not compare timestamps when setting roomstate (Nicolas Werner)
+- fix: properly fetch participants when transitioning from invite to join (Nicolas Werner)
+- fix: properly overwrite loaded state for partial loaded rooms (Nicolas Werner)
+- fix: some tests fail with the "fixed" membership fetch logic (Nicolas Werner)
+
+## [0.25.12] 1st March 2024
+- chore: pass refreshToken to uiaLogin (Krille)
+- fix: removed prev_sender for empty chats (Patrick Hettich)
+- fix: updated membership-leave for archived direct chats (Patrick Hettich)
+- fix: Use name of other participant on archived rooms (Patrick Hettich)
+- refactor: Deprecations after dart upgrade (Krille)
+
+## [0.25.11] 26th Februray 2024
+- feat: Implement handling soft logout (Krille)
+- feat: Store accesstokenExpiresIn and call softlogout 5 minutes before (Krille)
+- fix: convert boxNames to List in clear function when creating transaction (Gabby Gurdin)
+
+## [0.25.10] 23rd February 2024
+- chore: remove state events both in imp and preview events list (td)
+- feat: specify history_visibility when creating group chat (Karthikeyan S)
+
+## [0.25.9] 14th February 2024
+- fix: group calls terminator having sync glares (td)
+- fix: ignore expired calls rather than killing them (td)
+
+## [0.25.8] 31th January 2024
+- chore: Use some call events as last events (Krille)
+- fix: nested void function in encryption helper (The one with the braid)
+
+## [0.25.7] 29th January 2024
+- feat: add SQfLite encryption helper (The one with the braid)
+- fix: Skip invalid keys which got corrupted in database (Krille)
+
+## [0.25.6] - 22nd January 2024
+- feat: Add missing localizations for key verification messages (Krille)
+- fix: Correctly null cache in transactions for indexeddb (Krille)
+- fix: Transactions on web by doing them in the same way as on io (krille-chan)
+- refactor: Improve getTimeline senders (krille-chan)
+- refactor: Use maxnumberofotk from olm instead hardcode 100 (Krille)
+
+## [0.25.5] - 13th January 2024
+- fix: Another type error when combining lists (Krille)
+
+## [0.25.4] - 5th January 2024
 - fix: Type error when combining dynamic lists (Krille)
 - refactor: Throw client init exception on client init fail (krille-chan)
 
-## [0.25.3] - 2nd January 2023
+## [0.25.3] - 2nd January 2024
 - fix: Delete in transaction on new store does not clear cache correctly (Krille)
 
 ## [0.25.2] - 27th December 2023

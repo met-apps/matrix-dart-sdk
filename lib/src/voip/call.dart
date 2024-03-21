@@ -32,16 +32,31 @@ const String voipProtoVersion = '1';
 
 class CallTimeouts {
   /// The default life time for call events, in millisecond.
-  static const defaultCallEventLifetime = Duration(seconds: 50);
+  static const defaultCallEventLifetime = Duration(seconds: 10);
 
   /// The length of time a call can be ringing for.
-  static const callInviteLifetime = Duration(seconds: 120);
+  static const callInviteLifetime = Duration(seconds: 60);
 
   /// The delay for ice gathering.
-  static const iceGatheringDelay = Duration(milliseconds: 350);
+  static const iceGatheringDelay = Duration(milliseconds: 200);
 
   /// Delay before createOffer.
-  static const delayBeforeOffer = Duration(milliseconds: 250);
+  static const delayBeforeOffer = Duration(milliseconds: 100);
+}
+
+class UserMediaOptions {
+  static const optionalAudioConfig = {
+    'echoCancellation': true,
+    'googDAEchoCancellation': true,
+    'googEchoCancellation': true,
+    'googEchoCancellation2': true,
+    'noiseSuppression': true,
+    'googNoiseSuppression': true,
+    'googNoiseSuppression2': true,
+    'googAutoGainControl': true,
+    'googHighpassFilter': true,
+    'googTypingNoiseDetection': true,
+  };
 }
 
 extension RTCIceCandidateExt on RTCIceCandidate {
@@ -1481,7 +1496,7 @@ class CallSession {
                 'minFrameRate': '30',
               },
               'facingMode': 'user',
-              'optional': [],
+              'optional': [UserMediaOptions.optionalAudioConfig],
             }
           : false,
     };
@@ -1566,7 +1581,7 @@ class CallSession {
   Map<String, dynamic> _getOfferAnswerConstraints({bool iceRestart = false}) {
     return {
       'mandatory': {if (iceRestart) 'IceRestart': true},
-      'optional': [],
+      'optional': [UserMediaOptions.optionalAudioConfig],
     };
   }
 
